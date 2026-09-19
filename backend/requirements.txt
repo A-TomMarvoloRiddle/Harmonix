@@ -5,3 +5,10 @@ asyncpg
 redis
 faiss-cpu
 numpy
+torch
+torchvision
+torchaudio
+librosa
+pytest
+httpx
+kafka-python-ng
