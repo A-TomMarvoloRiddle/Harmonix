@@ -12,3 +12,4 @@ librosa
 pytest
 httpx
 kafka-python-ng
+pytest-asyncio
