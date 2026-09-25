@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base, Mapped, mapped_column
 from sqlalchemy import String, Integer, ForeignKey, JSON
-from datetime import datetime
+from datetime import datetime, timezone
 
 DATABASE_URL = "postgresql+asyncpg://harmonix_user:harmonix_password@localhost/harmonix"
 
@@ -34,7 +34,7 @@ class ListeningEvent(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     track_id: Mapped[int] = mapped_column(ForeignKey("tracks.id"))
     duration_ms: Mapped[int] = mapped_column(Integer)
-    timestamp: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
 
 async def init_db():
     async with engine.begin() as conn:
