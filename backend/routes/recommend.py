@@ -119,16 +119,24 @@ async def get_recommendations(req: RecommendRequest, db: AsyncSession = Depends(
                 (t.acousticness - v_acoustic)**2 +
                 (t.danceability - v_dance)**2
             )
-            score = 1.0 / (1.0 + dist)
+            # Use exponential decay so closer tracks have drastically higher scores
+            score = np.exp(-dist * 3.0)
             scores.append(score)
             
         scores_np = np.array(scores)
-        probs = scores_np / scores_np.sum()
         
-        # Sample directly based on distance probabilities
-        num_to_sample = min(req.limit * 3, len(tracks))
-        sampled_indices = np.random.choice(len(tracks), size=num_to_sample, replace=False, p=probs)
-        ranked_tracks = [tracks[i] for i in sampled_indices]
+        # Sort and take top candidates for exploitation (e.g. top 25)
+        ranked_indices = np.argsort(scores_np)[::-1]
+        pool_size = min(req.limit * 4, len(tracks))
+        top_indices = ranked_indices[:pool_size]
+        
+        # Calculate probabilities only within the top pool for exploration
+        pool_scores = scores_np[top_indices]
+        probs = pool_scores / pool_scores.sum()
+        
+        num_to_sample = min(req.limit * 3, len(top_indices))
+        sampled_pool_indices = np.random.choice(top_indices, size=num_to_sample, replace=False, p=probs)
+        ranked_tracks = [tracks[i] for i in sampled_pool_indices]
         
     elif deep_wide and tracks:
         with torch.no_grad():
@@ -137,12 +145,19 @@ async def get_recommendations(req: RecommendRequest, db: AsyncSession = Depends(
             c_t = torch.tensor([[0.5, 0.0, 0.8, 0.0]], dtype=torch.float32).repeat(len(tracks), 1)
             dw_scores = deep_wide(u_t, t_t, c_t).squeeze(-1).numpy()
             
-        # Add a small base probability to ensure entire catalog has a non-zero chance
-        dw_scores = np.maximum(dw_scores, 0) + 0.01 
-        probs = dw_scores / dw_scores.sum()
-        num_to_sample = min(req.limit * 3, len(tracks))
-        sampled_indices = np.random.choice(len(tracks), size=num_to_sample, replace=False, p=probs)
-        ranked_tracks = [tracks[i] for i in sampled_indices]
+        dw_scores = np.maximum(dw_scores, 0)
+        ranked_indices = np.argsort(dw_scores)[::-1]
+        pool_size = min(req.limit * 4, len(tracks))
+        top_indices = ranked_indices[:pool_size]
+        
+        # Softmax-like scaling for probability within the pool
+        pool_scores = dw_scores[top_indices]
+        pool_scores = np.exp(pool_scores * 2.0)
+        probs = pool_scores / pool_scores.sum()
+        
+        num_to_sample = min(req.limit * 3, len(top_indices))
+        sampled_pool_indices = np.random.choice(top_indices, size=num_to_sample, replace=False, p=probs)
+        ranked_tracks = [tracks[i] for i in sampled_pool_indices]
     else:
         # Fallback random
         ranked_tracks = list(tracks)
