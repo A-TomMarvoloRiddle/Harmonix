@@ -288,6 +288,10 @@
             if(!audioCtx.currentTrackId) return;
             const t = audioCtx.playlist[audioCtx.currentIdx];
             const meta = t ? { bpm: t.bpm, genre: t.genre, energy: t.energy, valence: t.valence } : {};
+            
+            if (isNaN(pct) || pct === null) pct = 0.0;
+            if (isNaN(durMs) || durMs === null) durMs = 0;
+
             fetch('/api/v1/telemetry', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -918,8 +922,8 @@
             
             // Auto refresh telemetry
             setInterval(() => {
-                if(document.getElementById('data').classList.contains('active')) fetchTelemetry();
-            }, 3000);
+                if(!document.getElementById('data').classList.contains('hidden')) fetchTelemetry();
+            }, 1000);
         };
     </script>
 </body>
