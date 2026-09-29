@@ -14,7 +14,7 @@ from typing import List, Dict
 router = APIRouter()
 
 # In-memory telemetry log for the admin dashboard
-telemetry_buffer = deque(maxlen=100)
+telemetry_buffer = deque(maxlen=1000)
 stats_data = {"kafka_msg_count": 0}
 
 async def get_db():
@@ -159,7 +159,7 @@ async def get_track_embedding(track_id: int, db=Depends(get_db)):
         return {"error": "not found"}
     
     # Scale embeddings strictly for visual differentiation in the UI
-    scaled_vector = [val * 300 for val in track.embedding]
+    scaled_vector = [val * 100 for val in track.embedding]
     return {"track_id": track.id, "title": track.title, "vector": scaled_vector}
 
 @router.get("/telemetry")
