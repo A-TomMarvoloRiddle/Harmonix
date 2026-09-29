@@ -13,3 +13,8 @@ pytest
 httpx
 kafka-python-ng
 pytest-asyncio
+matplotlib
+pydub
+audioread
+ffmpeg-python
+imageio-ffmpeg
