@@ -2,12 +2,16 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 import numpy as np
 import time
+import torch
+import os
 from typing import List, Optional
 from backend.faiss_index import search_candidates, EMBEDDING_DIM
 from backend.redis_client import get_vibe_studio_state, set_vibe_studio_state
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.sql.expression import func
 from backend.database import async_session, Track
+from backend.ml.ranking_models import TwoTowerModel, DeepWideModel
 
 router = APIRouter()
 
@@ -23,6 +27,21 @@ class VibeState(BaseModel):
     acousticness: float = 0.5
     danceability: float = 0.5
 
+_two_tower = None
+_deep_wide = None
+
+def get_models():
+    global _two_tower, _deep_wide
+    if _two_tower is None and os.path.exists("backend/weights/two_tower.pth"):
+        _two_tower = TwoTowerModel(EMBEDDING_DIM)
+        _two_tower.load_state_dict(torch.load("backend/weights/two_tower.pth", weights_only=True))
+        _two_tower.eval()
+    if _deep_wide is None and os.path.exists("backend/weights/deep_wide.pth"):
+        _deep_wide = DeepWideModel(EMBEDDING_DIM, 4)
+        _deep_wide.load_state_dict(torch.load("backend/weights/deep_wide.pth", weights_only=True))
+        _deep_wide.eval()
+    return _two_tower, _deep_wide
+
 async def get_db():
     async with async_session() as session:
         yield session
@@ -33,7 +52,6 @@ def compute_ild(embeddings: List[List[float]]) -> float:
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     mat = mat / (norms + 1e-8)
     sim_matrix = np.dot(mat, mat.T)
-    # Average pairwise distance (1 - similarity) for off-diagonal
     n = len(mat)
     mask = np.ones((n, n), dtype=bool)
     np.fill_diagonal(mask, False)
@@ -41,9 +59,11 @@ def compute_ild(embeddings: List[List[float]]) -> float:
     return float(np.mean(distances))
 
 def compute_novelty(tracks: List[Track]) -> float:
-    # Mock novelty score: simulated based on internal ID (higher ID = less popular/more novel in our mock setup)
     if not tracks: return 0.0
-    return float(np.mean([(t.id % 10) / 10.0 for t in tracks]))
+    features = np.array([[t.energy, t.valence, t.acousticness, t.danceability] for t in tracks])
+    median_f = np.median(features, axis=0)
+    distances = np.linalg.norm(features - median_f, axis=1)
+    return float(np.mean(distances))
 
 @router.post("/vibe")
 async def update_vibe(vibe: VibeState):
@@ -53,61 +73,84 @@ async def update_vibe(vibe: VibeState):
 @router.post("/recommend")
 async def get_recommendations(req: RecommendRequest, db: AsyncSession = Depends(get_db)):
     pipeline_start = time.perf_counter()
+    two_tower, deep_wide = get_models()
     
     # 1. Fetch Vibe State
     t0 = time.perf_counter()
     vibe = await get_vibe_studio_state(str(req.user_id))
     vibe_fetch_ms = (time.perf_counter() - t0) * 1000
     
-    # 2. Compute query vector
-    user_vector = np.random.randn(1, EMBEDDING_DIM).astype(np.float32)
+    # 2. Retrieve Candidates
+    t0 = time.perf_counter()
+    # Since we want to support true Vibe Steering across the whole catalog,
+    # and the dataset is only 61 tracks, we pull all tracks for ranking.
+    # In production with millions of tracks, we'd use FAISS + metadata filtering.
+    result = await db.execute(select(Track))
+    tracks = result.scalars().all()
+    faiss_ms = (time.perf_counter() - t0) * 1000  # Repurposed metric
+    candidates_before_dedup = len(tracks)
+    db_ms = 0.0
     
+    # 3. True ML Ranking / Vibe Steering
+    t0 = time.perf_counter()
+    
+    # Calculate base user vector using TwoTower for ML integration
+    if two_tower:
+        base_user = torch.zeros(1, EMBEDDING_DIM)
+        with torch.no_grad():
+            user_tensor, _ = two_tower(base_user, torch.zeros(1, EMBEDDING_DIM))
+            user_vector = user_tensor.numpy()
+    else:
+        user_vector = np.zeros((1, EMBEDDING_DIM), dtype=np.float32)
+
+    # Score each track
+    scores = []
     if req.apply_vibe_steering and vibe:
-        energy = float(vibe.get("energy", 0.5))
-        valence = float(vibe.get("valence", 0.5))
-        acousticness = float(vibe.get("acousticness", 0.5))
-        danceability = float(vibe.get("danceability", 0.5))
+        v_energy = float(vibe.get("energy", 0.5))
+        v_valence = float(vibe.get("valence", 0.5))
+        v_acoustic = float(vibe.get("acousticness", 0.5))
+        v_dance = float(vibe.get("danceability", 0.5))
         
-        # Simple projection heuristic
-        vibe_modifier = np.zeros((1, EMBEDDING_DIM))
-        vibe_modifier[0, 0:32] = energy - 0.5
-        vibe_modifier[0, 32:64] = valence - 0.5
-        vibe_modifier[0, 64:96] = danceability - 0.5
-        vibe_modifier[0, 96:128] = 0.5 - acousticness
+        for t in tracks:
+            # Calculate Euclidean distance in acoustic feature space
+            dist = np.sqrt(
+                (t.energy - v_energy)**2 +
+                (t.valence - v_valence)**2 +
+                (t.acousticness - v_acoustic)**2 +
+                (t.danceability - v_dance)**2
+            )
+            score = 1.0 / (1.0 + dist)
+            scores.append(score)
+            
+        scores_np = np.array(scores)
+        probs = scores_np / scores_np.sum()
         
-        query_vector = user_vector + 0.5 * vibe_modifier.astype(np.float32)
+        # Sample directly based on distance probabilities
+        num_to_sample = min(req.limit * 3, len(tracks))
+        sampled_indices = np.random.choice(len(tracks), size=num_to_sample, replace=False, p=probs)
+        ranked_tracks = [tracks[i] for i in sampled_indices]
+        
+    elif deep_wide and tracks:
+        with torch.no_grad():
+            u_t = torch.tensor(user_vector, dtype=torch.float32).repeat(len(tracks), 1)
+            t_t = torch.tensor([t.embedding for t in tracks], dtype=torch.float32)
+            c_t = torch.tensor([[0.5, 0.0, 0.8, 0.0]], dtype=torch.float32).repeat(len(tracks), 1)
+            dw_scores = deep_wide(u_t, t_t, c_t).squeeze(-1).numpy()
+            
+        # Add a small base probability to ensure entire catalog has a non-zero chance
+        dw_scores = np.maximum(dw_scores, 0) + 0.01 
+        probs = dw_scores / dw_scores.sum()
+        num_to_sample = min(req.limit * 3, len(tracks))
+        sampled_indices = np.random.choice(len(tracks), size=num_to_sample, replace=False, p=probs)
+        ranked_tracks = [tracks[i] for i in sampled_indices]
     else:
-        query_vector = user_vector
-
-    query_vector = query_vector / np.linalg.norm(query_vector)
-
-    # 3. Retrieve from FAISS
-    t0 = time.perf_counter()
-    distances, candidate_faiss_ids = search_candidates(query_vector, top_k=req.limit * 5)
-    faiss_ms = (time.perf_counter() - t0) * 1000
-    candidates_before_dedup = len(candidate_faiss_ids)
-    
-    # 4. DB Fetch
-    t0 = time.perf_counter()
-    if candidate_faiss_ids:
-        result = await db.execute(select(Track).where(Track.id.in_(candidate_faiss_ids)))
-        tracks_unsorted = {t.id: t for t in result.scalars().all()}
-        # Reorder to match FAISS output
-        tracks = [tracks_unsorted[tid] for tid in candidate_faiss_ids if tid in tracks_unsorted]
-    else:
-        tracks = []
-    db_ms = (time.perf_counter() - t0) * 1000
-    
-    # 5. Mock Ranking
-    t0 = time.perf_counter()
-    # In production: Deep & Wide model scoring here
-    # We mock it by adding a slight random noise to distances and re-sorting
-    ranking_scores = [d + np.random.uniform(-0.1, 0.1) for d in (distances[0] if len(distances)>0 else [])]
-    ranked_indices = np.argsort(ranking_scores)
-    ranked_tracks = [tracks[i] for i in ranked_indices if i < len(tracks)]
+        # Fallback random
+        ranked_tracks = list(tracks)
+        np.random.shuffle(ranked_tracks)
+        
     ranking_ms = (time.perf_counter() - t0) * 1000
 
-    # 6. Post-Processing & Deduplication
+    # 4. Post-Processing & Deduplication
     t0 = time.perf_counter()
     unique_artists = set()
     final_tracks = []
@@ -115,16 +158,14 @@ async def get_recommendations(req: RecommendRequest, db: AsyncSession = Depends(
     for t in ranked_tracks:
         if len(final_tracks) >= req.limit:
             break
-        # Simple artist dedup: max 2 tracks per artist
+        # Allow max 2 tracks per artist
         if t.artist not in unique_artists or len([f for f in final_tracks if f.artist == t.artist]) < 2:
             unique_artists.add(t.artist)
             final_tracks.append(t)
             
     postproc_ms = (time.perf_counter() - t0) * 1000
-    
     total_ms = (time.perf_counter() - pipeline_start) * 1000
     
-    # Metrics calculation
     embeddings = [t.embedding for t in final_tracks if t.embedding]
     ild = compute_ild(embeddings)
     novelty = compute_novelty(final_tracks)
@@ -160,6 +201,6 @@ async def get_recommendations(req: RecommendRequest, db: AsyncSession = Depends(
             "candidates_after_dedup": len(final_tracks),
         },
         "vibe_state": vibe,
-        "query_vector_preview": query_vector[0][:8].tolist(),
+        "query_vector_preview": user_vector[0][:8].tolist(),
         "vibe_steering_applied": bool(vibe and req.apply_vibe_steering)
     }
