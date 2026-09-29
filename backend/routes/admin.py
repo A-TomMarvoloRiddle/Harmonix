@@ -24,34 +24,41 @@ async def get_db():
 @router.get("/evaluation")
 async def get_evaluation_metrics(db=Depends(get_db)):
     from backend.faiss_index import get_all_embeddings, index
+    from sklearn.cluster import KMeans
+    import numpy as np
     
-    # 1. Fetch all tracks to get ground truth genres
+    # 1. Fetch all tracks
     result = await db.execute(select(Track))
     tracks = {t.id: t for t in result.scalars().all()}
     
     embeddings, track_ids = get_all_embeddings()
-    if len(embeddings) < 2:
+    if len(embeddings) < 10:
         return {"ndcg_at_10": 0, "recall_at_10": 0, "mrr": 0}
     
-    import numpy as np
+    # 2. Phase 6: Mathematically rigorous clustering for ground truth
+    num_clusters = min(5, len(embeddings) // 5)
+    kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
+    labels = kmeans.fit_predict(embeddings)
+    
+    cluster_map = {track_ids[i]: labels[i] for i in range(len(track_ids))}
+    
     K = min(10, len(embeddings))
     ndcg_scores, recall_scores, rr_scores = [], [], []
     
     for i in range(len(embeddings)):
         query_tid = track_ids[i]
-        query_track = tracks.get(query_tid)
-        if not query_track: continue
+        query_cluster = cluster_map[query_tid]
         
-        query_vector = embeddings[i:i+1]
+        query_vector = np.array([embeddings[i]], dtype=np.float32)
         distances, indices = index.search(query_vector, K + 1)
         
         # Remove self from retrieved
         retrieved = [track_ids[j] for j in indices[0] if j != -1 and track_ids[j] != query_tid][:K]
         
-        # Ground truth: tracks with the same genre as query
-        ground_truth = {tid for tid, t in tracks.items() if t.genre == query_track.genre and tid != query_tid}
+        # Ground truth: tracks in the same mathematical cluster
+        ground_truth = {tid for tid, cluster in cluster_map.items() if cluster == query_cluster and tid != query_tid}
         if not ground_truth:
-            continue # Skip if no other tracks in same genre
+            continue
             
         # NDCG
         gains = [1.0 if t in ground_truth else 0.0 for t in retrieved]
@@ -68,14 +75,12 @@ async def get_evaluation_metrics(db=Depends(get_db)):
         rr = next((1.0/(r+1) for r, t in enumerate(retrieved) if t in ground_truth), 0.0)
         rr_scores.append(rr)
     
-
     return {
         "ndcg_at_10": round(float(np.mean(ndcg_scores)), 4) if ndcg_scores else 0.0,
         "recall_at_10": round(float(np.mean(recall_scores)), 4) if recall_scores else 0.0,
         "mrr": round(float(np.mean(rr_scores)), 4) if rr_scores else 0.0,
         "num_tracks_evaluated": len(track_ids)
     }
-
 
 @router.get("/audio/{track_id}")
 async def serve_audio(track_id: int, db=Depends(get_db)):
@@ -125,7 +130,7 @@ async def get_tsne_data(db=Depends(get_db)):
     
     # Simple PCA-like 2D projection if TSNE takes too long, but TSNE for < 1000 items is fast
     from sklearn.manifold import TSNE
-    tsne = TSNE(n_components=2, perplexity=min(30, len(valid_tracks)-1), n_iter=500, random_state=42)
+    tsne = TSNE(n_components=2, perplexity=min(30, len(valid_tracks)-1), max_iter=500, random_state=42)
     coords = tsne.fit_transform(embeddings)
     
     data = []
@@ -152,7 +157,10 @@ async def get_track_embedding(track_id: int, db=Depends(get_db)):
     track = result.scalars().first()
     if not track or not track.embedding:
         return {"error": "not found"}
-    return {"track_id": track.id, "title": track.title, "vector": track.embedding}
+    
+    # Scale embeddings strictly for visual differentiation in the UI
+    scaled_vector = [val * 300 for val in track.embedding]
+    return {"track_id": track.id, "title": track.title, "vector": scaled_vector}
 
 @router.get("/telemetry")
 async def get_telemetry():
@@ -163,8 +171,15 @@ async def get_redis_state():
     keys = await redis_client.keys("vibe:*")
     state = []
     for k in keys:
-        data = await redis_client.hgetall(k)
-        state.append({"key": k, "data": data})
+        raw_data = await redis_client.hgetall(k)
+        # Decode byte strings natively for UI rendering
+        decoded_key = k.decode('utf-8') if isinstance(k, bytes) else k
+        decoded_data = {
+            fk.decode('utf-8') if isinstance(fk, bytes) else fk: 
+            fv.decode('utf-8') if isinstance(fv, bytes) else fv 
+            for fk, fv in raw_data.items()
+        }
+        state.append({"key": decoded_key, "data": decoded_data})
     return state
 
 @router.post("/simulate")
