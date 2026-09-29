@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Harmonix Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: '#8B5CF6',
+                        bgBase: '#0f0d15',
+                        bgCard: '#15121b',
+                        bgElevated: '#211e27'
+                    }
+                }
+            }
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #0f0d15; color: #e7e0ed; font-family: 'Inter', sans-serif; }
+        .glass-panel { background: rgba(33, 30, 39, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.05); }
+        
+    </style>
+</head>
+<body class="h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="h-16 glass-panel flex items-center px-6 border-b z-10 shrink-0">
+        <div class="text-xl font-bold text-brand tracking-wider">HARMONIX</div>
+        <nav class="ml-10 flex gap-4">
+            <button onclick="switchTab('player')" class="tab-btn player-tab text-brand border-b-2 border-brand px-2 py-1">🎵 Player</button>
+            <button onclick="switchTab('vibe')" class="tab-btn vibe-tab text-gray-400 hover:text-white px-2 py-1">🎛️ Vibe Studio</button>
+            <button onclick="switchTab('mllab')" class="tab-btn mllab-tab text-gray-400 hover:text-white px-2 py-1">🔬 ML Lab</button>
+            <button onclick="switchTab('data')" class="tab-btn data-tab text-gray-400 hover:text-white px-2 py-1">📊 Data & Metrics</button>
+        </nav>
+        <div class="ml-auto text-sm text-gray-400">User ID: 1</div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 overflow-auto p-6">
+        
+        <!-- Tab: Player -->
+        <div id="player" class="tab-content flex h-full flex gap-6">
+            <div class="flex-1 flex flex-col gap-4">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-2xl font-bold">Recommended for You</h2>
+                    <button onclick="getRecommendations()" class="bg-brand hover:bg-purple-600 text-white px-4 py-2 rounded-lg font-medium transition">
+                        Refresh
+                    </button>
+                </div>
+                
+                <div id="track-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    <!-- Cards injected here -->
+                    <div class="text-gray-500 italic p-4">Click Refresh to load tracks...</div>
+                </div>
+            </div>
+            
+            <!-- Explainability Drawer -->
+            <div id="explain-drawer" class="w-80 glass-panel rounded-xl p-4 hidden flex-col gap-4">
+                <div class="flex justify-between items-center">
+                    <h3 class="font-bold text-lg">🧠 Why this track?</h3>
+                    <button onclick="closeExplain()" class="text-gray-400 hover:text-white">✕</button>
+                </div>
+                <div id="explain-content" class="flex flex-col gap-4">
+                    <!-- Injected here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Vibe Studio -->
+        <div id="vibe" class="tab-content hidden h-full">
+            <div class="max-w-4xl mx-auto flex flex-col md:flex-row gap-8 mt-8">
+                <div class="flex-1 glass-panel p-6 rounded-xl">
+                    <h2 class="text-2xl font-bold mb-6">Steer the Algorithm</h2>
+                    
+                    <div class="flex flex-col gap-6">
+                        <div>
+                            <label class="flex justify-between text-sm mb-2"><span>Energy</span> <span id="val-energy">0.50</span></label>
+                            <input type="range" id="slider-energy" min="0" max="1" step="0.01" value="0.5" class="w-full accent-brand" oninput="updateVibeChart()">
+                        </div>
+                        <div>
+                            <label class="flex justify-between text-sm mb-2"><span>Valence (Mood)</span> <span id="val-valence">0.50</span></label>
+                            <input type="range" id="slider-valence" min="0" max="1" step="0.01" value="0.5" class="w-full accent-brand" oninput="updateVibeChart()">
+                        </div>
+                        <div>
+                            <label class="flex justify-between text-sm mb-2"><span>Acousticness</span> <span id="val-acousticness">0.50</span></label>
+                            <input type="range" id="slider-acousticness" min="0" max="1" step="0.01" value="0.5" class="w-full accent-brand" oninput="updateVibeChart()">
+                        </div>
+                        <div>
+                            <label class="flex justify-between text-sm mb-2"><span>Danceability</span> <span id="val-danceability">0.50</span></label>
+                            <input type="range" id="slider-danceability" min="0" max="1" step="0.01" value="0.5" class="w-full accent-brand" oninput="updateVibeChart()">
+                        </div>
+                    </div>
+                    
+                    <button onclick="applyVibe()" class="w-full mt-8 bg-brand hover:bg-purple-600 text-white py-3 rounded-lg font-bold transition shadow-[0_0_15px_rgba(139,92,246,0.3)]">
+                        Apply Vibe & Recommend
+                    </button>
+                    <div id="vibe-compare" class="hidden mt-8 gap-4 border-t border-white/10 pt-6">
+                        <div class="flex-1">
+                            <h4 class="text-sm text-gray-400 mb-2">Before Vibe</h4>
+                            <div id="vibe-before-list" class="space-y-2 text-sm text-gray-500"></div>
+                        </div>
+                        <div class="flex-1">
+                            <h4 class="text-sm text-brand mb-2 flex items-center gap-2">After Vibe <span class="bg-brand/20 text-brand text-xs px-2 py-0.5 rounded">vibe_steering_applied: true</span></h4>
+                            <div id="vibe-after-list" class="space-y-2 text-sm"></div>
+                        </div>
+                    </div>
+
+                </div>
+                
+                <div class="w-full md:w-1/2 flex items-center justify-center p-4">
+                    <div class="w-full max-w-sm aspect-square">
+                        <canvas id="vibeRadarChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: ML Lab -->
+        <div id="mllab" class="tab-content hidden h-full flex flex-col gap-6">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="glass-panel p-4 rounded-xl text-center"><div class="text-3xl font-bold text-brand" id="stat-tracks">-</div><div class="text-sm text-gray-400">Total Tracks</div></div>
+                <div class="glass-panel p-4 rounded-xl text-center"><div class="text-3xl font-bold text-brand" id="stat-faiss">-</div><div class="text-sm text-gray-400">FAISS Index Size</div></div>
+                <div class="glass-panel p-4 rounded-xl text-center"><div class="text-3xl font-bold text-brand" id="stat-redis">-</div><div class="text-sm text-gray-400">Redis Keys</div></div>
+                <div class="glass-panel p-4 rounded-xl text-center"><div class="text-3xl font-bold text-brand" id="stat-kafka">-</div><div class="text-sm text-gray-400">Kafka Status</div></div>
+            </div>
+            
+            <div class="flex gap-6 min-h-[400px] flex-1">
+                <div class="flex-1 glass-panel p-4 rounded-xl flex flex-col">
+                    <h3 class="font-bold mb-4">Pipeline Latency Waterfall (ms)</h3>
+                    <div class="flex-1 relative w-full h-full"><canvas id="latencyChart"></canvas></div>
+                </div>
+                <div class="flex-1 glass-panel p-4 rounded-xl flex flex-col">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-bold">FAISS Vector Space (t-SNE)</h3>
+                        <button onclick="loadTsne()" class="text-xs bg-bgElevated px-2 py-1 rounded">Load</button>
+                    </div>
+                    <div class="flex-1 relative w-full h-full"><canvas id="tsneChart"></canvas></div>
+                </div>
+            </div>
+            
+            <div class="glass-panel p-4 rounded-xl">
+                <h3 class="font-bold mb-4">Audio Feature Embeddings Gallery (Spectrogram & Grad-CAM)</h3>
+                <div class="flex justify-between mb-2">
+                    <button onclick="loadGalleries()" class="text-sm bg-brand px-3 py-1 rounded">Load Images</button>
+                </div>
+                <div id="gallery-grid" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-4">
+                    <!-- Images go here -->
+                </div>
+            </div>
+            <div class="glass-panel p-4 rounded-xl mt-4">
+                <div class="flex items-center gap-4 mb-4">
+                    <h3 class="font-bold">🔍 128-D Embedding Inspector</h3>
+                    <select id="embed-select" class="bg-bgElevated text-sm px-2 py-1 rounded border border-gray-700 flex-1 max-w-xs">
+                        <option value="">Select a track...</option>
+                    </select>
+                    <button onclick="loadEmbedding()" class="text-sm bg-brand px-3 py-1 rounded">Inspect</button>
+                </div>
+                <div style="height:180px;position:relative"><canvas id="embedChart"></canvas></div>
+            </div>
+
+        </div>
+
+        <!-- Tab: Data -->
+        <div id="data" class="tab-content hidden h-full flex flex-col gap-6">
+
+            <div class="flex gap-6 min-h-[12rem] flex-1">
+                <div class="flex-1 glass-panel p-4 rounded-xl flex flex-col">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-bold">📐 Offline Evaluation Scores</h3>
+                        <button onclick="loadEvaluation()" class="text-xs bg-brand px-3 py-1 rounded">Compute</button>
+                    </div>
+                    <table class="w-full text-sm">
+                        <thead class="text-gray-400 border-b border-gray-700">
+                            <tr><th class="py-2 text-left">Metric</th><th class="text-left">Score</th></tr>
+                        </thead>
+                        <tbody id="eval-body">
+                            <tr><td colspan="2" class="py-4 text-center text-gray-500 italic">Click Compute to run evaluation...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="flex-1 glass-panel p-4 rounded-xl flex flex-col overflow-auto">
+                    <h3 class="font-bold mb-2">Artist Dedup Visualization</h3>
+                    <div id="dedup-viz" class="flex-1 text-sm text-gray-500">Run a recommendation to see filtering.</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 min-h-[12rem] flex-1">
+                <div class="glass-panel p-2 rounded-xl flex flex-col items-center"><h4 class="text-sm text-gray-400">Intra-List Diversity</h4><div class="relative w-full flex-1"><canvas id="chart-ild"></canvas></div></div>
+                <div class="glass-panel p-2 rounded-xl flex flex-col items-center"><h4 class="text-sm text-gray-400">Novelty Score</h4><div class="relative w-full flex-1"><canvas id="chart-novelty"></canvas></div></div>
+                <div class="glass-panel p-2 rounded-xl flex flex-col items-center"><h4 class="text-sm text-gray-400">Genre Spread</h4><div class="relative w-full flex-1"><canvas id="chart-genre"></canvas></div></div>
+                <div class="glass-panel p-2 rounded-xl flex flex-col items-center"><h4 class="text-sm text-gray-400">Artist Coverage</h4><div class="relative w-full flex-1"><canvas id="chart-artist"></canvas></div></div>
+            </div>
+            
+            <div class="flex gap-6 flex-1 min-h-[300px]">
+                <div class="flex-1 glass-panel p-4 rounded-xl overflow-auto flex flex-col">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-bold">Live Telemetry Feed</h3>
+                        <button onclick="simulateTelemetry()" class="text-xs bg-red-500/20 text-red-400 border border-red-500/50 px-2 py-1 rounded hover:bg-red-500/40">Simulate 20 Events</button>
+                    </div>
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-gray-400 border-b border-gray-700">
+                            <tr><th>Time</th><th>User</th><th>Track</th><th>Event</th><th>Metadata</th></tr>
+                        </thead>
+                        <tbody id="telemetry-body"></tbody>
+                    </table>
+                </div>
+                
+                <div class="flex-1 glass-panel p-4 rounded-xl overflow-auto">
+                    <h3 class="font-bold mb-4">Redis Vibe State Monitor</h3>
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-gray-400 border-b border-gray-700">
+                            <tr><th>Key</th><th>Energy</th><th>Valence</th><th>Acoustic</th><th>Dance</th></tr>
+                        </thead>
+                        <tbody id="redis-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+    </main>
+    
+    <!-- Player Bar -->
+    <div class="h-20 glass-panel shrink-0 border-t flex items-center px-6 gap-6 z-20">
+        <div class="flex items-center gap-4 w-64">
+            <div class="w-12 h-12 bg-gray-800 rounded flex items-center justify-center text-xl">🎵</div>
+            <div>
+                <div id="np-title" class="font-bold truncate w-40">Not Playing</div>
+                <div id="np-artist" class="text-xs text-gray-400 truncate w-40">--</div>
+                <div id="np-meta" class="text-xs text-gray-500 mt-0.5">-- BPM • --</div>
+            </div>
+        </div>
+        
+        <div class="flex-1 flex flex-col items-center gap-2">
+            <div class="flex gap-4">
+                <button id="prev-btn" class="text-gray-400 hover:text-white" onclick="prevTrack()">⏮</button>
+                <button id="play-btn" class="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center pl-1 hover:scale-105 transition">▶</button>
+                <button id="next-btn" class="text-gray-400 hover:text-white" onclick="skipTrack()">⏭</button>
+            </div>
+            <div class="w-full max-w-md flex items-center gap-2 text-xs text-gray-500">
+                <span id="time-current">0:00</span>
+                <input id="progress-bar" type="range" min="0" max="100" value="0" class="flex-1 h-1 accent-brand cursor-pointer">
+                <span id="time-total">0:00</span>
+            </div>
+        </div>
+        
+        <div class="w-64 flex justify-end gap-4">
+            <button class="text-gray-400 hover:text-brand" title="Save to Library" onclick="saveTrack()">❤️</button>
+            <div class="flex items-center gap-1" title="Crossfade (s)">
+                <span class="text-xs text-gray-400">🔀</span>
+                <input id="crossfade-slider" type="range" min="0" max="12" step="1" value="2" class="w-16 accent-brand" oninput="document.getElementById('crossfade-val').innerText=this.value+'s'">
+                <span id="crossfade-val" class="text-xs text-gray-400 w-4 text-right">2s</span>
+            </div>
+            <div class="flex items-center gap-2"><span>🔊</span><input id="vol-slider" type="range" min="0" max="1" step="0.01" value="1" class="w-20 accent-brand"></div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let radarChart = null;
+        let latencyChart = null;
+        let gauges = {};
+        
+        // --- Audio Engine ---
+        const audioCtx = {
+            el1: new Audio(),
+            el2: new Audio(),
+            active: 1,
+            get el() { return this.active === 1 ? this.el1 : this.el2; },
+            get oldEl() { return this.active === 1 ? this.el2 : this.el1; },
+            playlist: [],
+            currentIdx: 0,
+            currentTrackId: null,
+            fadeInterval: null,
+            crossfadingToNext: false
+        };
+
+        let _playStartTime = 0;
+        let _heartbeatTimer = null;
+
+        function sendTelemetry(eventType, durMs = 0, pct = 0, isRapid = false) {
+            if(!audioCtx.currentTrackId) return;
+            const t = audioCtx.playlist[audioCtx.currentIdx];
+            const meta = t ? { bpm: t.bpm, genre: t.genre, energy: t.energy, valence: t.valence } : {};
+            fetch('/api/v1/telemetry', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: 1,
+                    track_id: audioCtx.currentTrackId,
+                    event_type: eventType,
+                    duration_ms: durMs,
+                    listened_percentage: pct,
+                    is_rapid_skip: isRapid,
+                    context: meta
+                })
+            });
+        }
+
+        
+        function fmt(time) {
+            if(isNaN(time)) return "0:00";
+            const m = Math.floor(time / 60);
+            const s = Math.floor(time % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        }
+
+        function setupAudio(audio) {
+            audio.addEventListener('timeupdate', (e) => {
+                if (e.target !== audioCtx.el) return;
+                const cf = parseFloat(document.getElementById('crossfade-slider').value) || 0;
+                
+                const pct = (audio.currentTime / audio.duration) * 100 || 0;
+                document.getElementById('progress-bar').value = pct;
+                document.getElementById('time-current').innerText = fmt(audio.currentTime);
+                document.getElementById('time-total').innerText = fmt(audio.duration);
+
+                if (cf > 0 && audio.duration && !audioCtx.crossfadingToNext) {
+                    if (audio.duration - audio.currentTime <= cf) {
+                        audioCtx.crossfadingToNext = true;
+                        nextTrack();
+                    }
+                }
+            });
+
+            audio.onended = (e) => {
+                if (e.target !== audioCtx.el) return;
+                if (!audioCtx.crossfadingToNext) {
+                    const pct = audio.duration ? audio.currentTime / audio.duration : 0;
+                    sendTelemetry(pct >= 0.9 ? 'track_completed' : 'skip',
+                        Math.round(audio.currentTime * 1000), pct, pct < 0.08);
+                    clearInterval(_heartbeatTimer);
+                    nextTrack();
+                }
+            };
+        }
+        setupAudio(audioCtx.el1);
+        setupAudio(audioCtx.el2);
+
+        document.getElementById('progress-bar').oninput = function() {
+            if(audioCtx.el.duration) {
+                audioCtx.el.currentTime = (this.value / 100) * audioCtx.el.duration;
+            }
+        };
+
+        document.getElementById('vol-slider').oninput = function() {
+            if(!audioCtx.fadeInterval || !audioCtx.crossfadingToNext) {
+                audioCtx.el.volume = this.value;
+            }
+        };
+
+        document.getElementById('play-btn').onclick = () => {
+            if (!audioCtx.el.src) return;
+            if (audioCtx.el.paused) {
+                sendTelemetry('play', 0, audioCtx.el.currentTime / (audioCtx.el.duration || 1));
+                audioCtx.el.play();
+                document.getElementById('play-btn').innerHTML = '⏸';
+                document.getElementById('play-btn').classList.remove('pl-1');
+                _playStartTime = Date.now();
+                clearInterval(_heartbeatTimer);
+                _heartbeatTimer = setInterval(() => {
+                    sendTelemetry('heartbeat', Math.round(Date.now() - _playStartTime),
+                        audioCtx.el.currentTime / (audioCtx.el.duration || 1));
+                }, 30000);
+            } else {
+                sendTelemetry('pause', Math.round(audioCtx.el.currentTime * 1000), audioCtx.el.currentTime / (audioCtx.el.duration || 1));
+                audioCtx.el.pause();
+                document.getElementById('play-btn').innerHTML = '▶';
+                document.getElementById('play-btn').classList.add('pl-1');
+                clearInterval(_heartbeatTimer);
+            }
+        };
+
+        function playTrack(trackId, title, artist, idx) {
+            audioCtx.currentIdx = idx;
+            audioCtx.currentTrackId = trackId;
+            audioCtx.crossfadingToNext = false;
+            
+            const prevEl = audioCtx.el;
+            audioCtx.active = audioCtx.active === 1 ? 2 : 1;
+            const newEl = audioCtx.el;
+
+            newEl.src = `/api/v1/admin/audio/${trackId}`;
+            newEl.load();
+            
+            document.getElementById('np-title').innerText = title;
+            document.getElementById('np-artist').innerText = artist;
+            const t = audioCtx.playlist[idx];
+            if(t) document.getElementById('np-meta').innerText = `${Math.round(t.bpm || 0)} BPM • ${t.genre || 'Unknown'}`;
+            document.getElementById('play-btn').innerHTML = '⏸';
+            document.getElementById('play-btn').classList.remove('pl-1');
+            
+            const cf = parseFloat(document.getElementById('crossfade-slider').value) || 0;
+            const maxVol = parseFloat(document.getElementById('vol-slider').value) || 1;
+
+            if (cf > 0 && !prevEl.paused && prevEl.src) {
+                newEl.volume = 0;
+                newEl.play().catch(()=>{});
+                
+                const steps = 20;
+                const stepTime = (cf * 1000) / steps;
+                let step = 0;
+                clearInterval(audioCtx.fadeInterval);
+                audioCtx.fadeInterval = setInterval(() => {
+                    step++;
+                    const ratio = step / steps;
+                    newEl.volume = Math.min(ratio * maxVol, maxVol);
+                    prevEl.volume = Math.max((1 - ratio) * maxVol, 0);
+                    if(step >= steps) {
+                        clearInterval(audioCtx.fadeInterval);
+                        prevEl.pause();
+                        prevEl.src = '';
+                    }
+                }, stepTime);
+            } else {
+                prevEl.pause();
+                newEl.volume = maxVol;
+                newEl.play().catch(()=>{});
+            }
+
+            sendTelemetry('play');
+        }
+
+        function prevTrack() {
+            if(audioCtx.playlist.length === 0) return;
+            const pct = audioCtx.el.duration ? audioCtx.el.currentTime / audioCtx.el.duration : 0;
+            sendTelemetry('back', Math.round(audioCtx.el.currentTime * 1000), pct);
+            const idx = Math.max(0, audioCtx.currentIdx - 1);
+            const t = audioCtx.playlist[idx];
+            playTrack(t.id, t.title, t.artist, idx);
+        }
+
+        async function nextTrack() {
+            if(audioCtx.playlist.length === 0) return;
+            let idx = audioCtx.currentIdx + 1;
+            if(idx >= audioCtx.playlist.length) {
+                const btn = document.getElementById('next-btn');
+                if(btn) { btn.innerText = '⏳'; btn.disabled = true; }
+                await getRecommendations();
+                if(btn) { btn.innerText = '⏭'; btn.disabled = false; }
+                idx = 0;
+            }
+            if(audioCtx.playlist.length > 0) {
+                const t = audioCtx.playlist[idx];
+                playTrack(t.id, t.title, t.artist, idx);
+            }
+        }
+
+
+        function skipTrack() {
+            const pct = audioCtx.el.duration ? audioCtx.el.currentTime / audioCtx.el.duration : 0;
+            sendTelemetry('skip', Math.round(audioCtx.el.currentTime * 1000), pct, pct < 0.08);
+            clearInterval(_heartbeatTimer);
+            nextTrack();
+        }
+
+
+        function saveTrack() {
+            if(audioCtx.currentTrackId) {
+                sendTelemetry('save');
+                // Flash the button
+                const btn = event.currentTarget;
+                btn.style.color = '#ef4444';
+                setTimeout(() => btn.style.color = '', 1000);
+            }
+        }
+        
+        // --- Chart Plugins ---
+        Chart.register({
+            id: 'centerText',
+            afterDraw(chart) {
+                if (chart.config.type !== 'doughnut') return;
+                const { ctx, chartArea: { width, height, top } } = chart;
+                const val = chart.data.datasets[0].data[0];
+                ctx.save();
+                ctx.font = 'bold 20px Inter';
+                ctx.fillStyle = '#e7e0ed';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(typeof val === 'number' ? val.toFixed(0) + (chart.canvas.id==='chart-genre'||chart.canvas.id==='chart-artist' ? '' : '%') : '-', width/2, top + height/2);
+                ctx.restore();
+            }
+        });
+
+        // Tab Switching
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.getElementById(tabId).classList.remove('hidden');
+            
+            document.querySelectorAll('.tab-btn').forEach(el => {
+                el.classList.remove('text-brand', 'border-b-2', 'border-brand');
+                el.classList.add('text-gray-400');
+            });
+            const btn = document.querySelector(`.${tabId}-tab`);
+            btn.classList.add('text-brand', 'border-b-2', 'border-brand');
+            btn.classList.remove('text-gray-400');
+            
+            if (tabId === 'mllab') fetchStats();
+            if (tabId === 'data') fetchTelemetry();
+        }
+
+        // --- Tab 1: Player ---
+        async function getRecommendations() {
+            const btn = event ? event.currentTarget : document.querySelector('button[onclick="getRecommendations()"]');
+            if(btn) { btn.innerText = 'Loading...'; btn.disabled = true; }
+            
+            try {
+                const res = await fetch('/api/v1/recommend', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_id: 1, limit: 6, apply_vibe_steering: true })
+                });
+                const data = await res.json();
+                audioCtx.playlist = data.tracks;
+                
+                const grid = document.getElementById('track-grid');
+                grid.innerHTML = '';
+                data.tracks.forEach((t, i) => {
+                    const escTitle = t.title.replace(/'/g, "\\'");
+                    const escArtist = t.artist.replace(/'/g, "\\'");
+                    const escGenre = (t.genre || 'Unknown').replace(/'/g, "\\'");
+                    
+                    grid.innerHTML += `
+                        <div class="bg-bgElevated rounded-lg p-4 hover:bg-gray-800 transition cursor-pointer group flex flex-col" onclick="playTrack(${t.id}, '${escTitle}', '${escArtist}', ${i})">
+                            <div class="w-full aspect-square bg-gray-900 rounded mb-3 flex items-center justify-center relative overflow-hidden">
+                                <img src="/static/spectrograms/track_${t.id}.png" class="absolute inset-0 w-full h-full object-cover opacity-50 mix-blend-screen" onerror="this.style.display='none'">
+                                <span class="text-4xl group-hover:scale-110 transition">🎵</span>
+                            </div>
+                            <div class="font-bold truncate">${t.title}</div>
+                            <div class="text-sm text-gray-400 truncate">${t.artist}</div>
+                            <div class="mt-2 flex justify-between items-center">
+                                <span class="text-xs bg-brand/20 text-brand px-2 py-0.5 rounded">${t.genre || 'Unknown'}</span>
+                                <button onclick="event.stopPropagation(); openExplain(${t.id}, '${escTitle}', '${escGenre}', ${t.energy}, ${t.valence})" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">🧠 Why?</button>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                
+                updateLatencyChart(data.pipeline_metrics);
+                updateGauges(data.quality_metrics);
+                if (typeof renderDedup !== 'undefined') renderDedup(data.quality_metrics.candidates_before_dedup, data.quality_metrics.candidates_after_dedup, data.tracks);
+
+            } catch(e) {
+                console.error(e);
+            } finally {
+                if(btn) { btn.innerText = 'Refresh'; btn.disabled = false; }
+            }
+        }
+        
+        function openExplain(id, title, genre, energy, valence) {
+            document.getElementById('explain-drawer').classList.remove('hidden');
+            document.getElementById('explain-drawer').classList.add('flex');
+            
+            const ePercent = Math.round((energy||0)*100);
+            const vPercent = Math.round((valence||0)*100);
+            
+            document.getElementById('explain-content').innerHTML = `
+                <div class="font-bold text-xl">${title}</div>
+                <div class="text-sm text-gray-400">ResNet-18 extracted feature map:</div>
+                <img src="/static/gradcam/track_${id}.png" class="w-full rounded bg-black" onerror="this.src=''" alt="Grad-CAM">
+                <div class="text-sm mt-2">
+                    <p>The CNN activated heavily on the frequency bands shown in red.</p>
+                    <div class="mt-4 space-y-2">
+                        <div class="flex justify-between text-xs"><span>Energy</span><span>${ePercent}%</span></div>
+                        <div class="w-full bg-gray-800 rounded h-1"><div class="bg-red-500 h-1 rounded" style="width: ${ePercent}%"></div></div>
+                        <div class="flex justify-between text-xs mt-2"><span>Valence</span><span>${vPercent}%</span></div>
+                        <div class="w-full bg-gray-800 rounded h-1"><div class="bg-yellow-500 h-1 rounded" style="width: ${vPercent}%"></div></div>
+                    </div>
+                </div>
+            `;
+        }
+        function closeExplain() { document.getElementById('explain-drawer').classList.add('hidden'); document.getElementById('explain-drawer').classList.remove('flex'); }
+
+        // --- Tab 2: Vibe Studio ---
+        
+        async function applyVibe() {
+            const e = parseFloat(document.getElementById('slider-energy').value);
+            const v = parseFloat(document.getElementById('slider-valence').value);
+            const a = parseFloat(document.getElementById('slider-acousticness').value);
+            const d = parseFloat(document.getElementById('slider-danceability').value);
+            
+            const btn = event.currentTarget;
+            btn.innerText = 'Applying...';
+            
+            const beforeTracks = [...audioCtx.playlist];
+            
+            await fetch('/api/v1/vibe', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ user_id: 1, energy: e, valence: v, acousticness: a, danceability: d })
+            });
+            
+            await getRecommendations();
+            
+            document.getElementById('vibe-compare').classList.remove('hidden');
+            document.getElementById('vibe-compare').classList.add('flex');
+            
+            const afterTracks = [...audioCtx.playlist];
+            
+            document.getElementById('vibe-before-list').innerHTML = beforeTracks.map(t => `<div class="bg-gray-900 px-3 py-2 rounded truncate">${t.title}</div>`).join('');
+            document.getElementById('vibe-after-list').innerHTML = afterTracks.map(t => `<div class="bg-brand/10 border border-brand/20 px-3 py-2 rounded truncate">${t.title}</div>`).join('');
+            
+            btn.innerText = 'Apply Vibe & Recommend';
+        }
+
+        function initRadar() {
+            const ctx = document.getElementById('vibeRadarChart').getContext('2d');
+            radarChart = new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    labels: ['Energy', 'Valence', 'Acousticness', 'Danceability'],
+                    datasets: [{
+                        label: 'Vibe Target',
+                        data: [0.5, 0.5, 0.5, 0.5],
+                        backgroundColor: 'rgba(139, 92, 246, 0.2)',
+                        borderColor: '#8B5CF6',
+                        pointBackgroundColor: '#8B5CF6',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: '#8B5CF6'
+                    }]
+                },
+                options: {
+                    scales: { r: { min: 0, max: 1, ticks: { display: false }, grid: { color: 'rgba(255,255,255,0.1)' }, pointLabels: { color: '#ccc' } } },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+        
+        function updateVibeChart() {
+            const e = parseFloat(document.getElementById('slider-energy').value);
+            const v = parseFloat(document.getElementById('slider-valence').value);
+            const a = parseFloat(document.getElementById('slider-acousticness').value);
+            const d = parseFloat(document.getElementById('slider-danceability').value);
+            
+            document.getElementById('val-energy').innerText = e.toFixed(2);
+            document.getElementById('val-valence').innerText = v.toFixed(2);
+            document.getElementById('val-acousticness').innerText = a.toFixed(2);
+            document.getElementById('val-danceability').innerText = d.toFixed(2);
+            
+            radarChart.data.datasets[0].data = [e, v, a, d];
+            radarChart.update();
+        }
+        
+        async function oldApplyVibe() {
+            const e = parseFloat(document.getElementById('slider-energy').value);
+            const v = parseFloat(document.getElementById('slider-valence').value);
+            const a = parseFloat(document.getElementById('slider-acousticness').value);
+            const d = parseFloat(document.getElementById('slider-danceability').value);
+            
+            await fetch('/api/v1/vibe', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ user_id: 1, energy: e, valence: v, acousticness: a, danceability: d })
+            });
+            
+            switchTab('player');
+            getRecommendations();
+        }
+
+        // --- Tab 3: ML Lab ---
+        async function oldFetchStats() {
+            try {
+                const res = await fetch('/api/v1/admin/stats');
+                const data = await res.json();
+                document.getElementById('stat-tracks').innerText = data.track_count;
+                document.getElementById('stat-faiss').innerText = data.faiss_index_size;
+                document.getElementById('stat-redis').innerText = data.redis_vibe_keys;
+                document.getElementById('stat-kafka').innerText = data.kafka_status;
+            } catch(e) {}
+        }
+        
+        
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/v1/admin/stats');
+                const data = await res.json();
+                document.getElementById('stat-tracks').innerText = data.track_count;
+                document.getElementById('stat-faiss').innerText = data.faiss_index_size;
+                document.getElementById('stat-redis').innerText = data.redis_vibe_keys;
+                document.getElementById('stat-kafka').innerText = data.kafka_status;
+                
+                const tr = await fetch('/api/v1/admin/tracks');
+                const tlist = await tr.json();
+                const sel = document.getElementById('embed-select');
+                if (sel && sel.options.length <= 1) {
+                    tlist.forEach(t => {
+                        const opt = document.createElement('option');
+                        opt.value = t.id; opt.innerText = t.title;
+                        sel.appendChild(opt);
+                    });
+                }
+            } catch(e) {}
+        }
+
+        function initLatencyChart() {
+            const ctx = document.getElementById('latencyChart').getContext('2d');
+            latencyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Latest Request'],
+                    datasets: [
+                        { label: 'Redis (Vibe)', data: [0], backgroundColor: '#ef4444' },
+                        { label: 'FAISS (Retrieval)', data: [0], backgroundColor: '#3b82f6' },
+                        { label: 'PostgreSQL (DB)', data: [0], backgroundColor: '#10b981' },
+                        { label: 'D&W (Ranking)', data: [0], backgroundColor: '#f59e0b' },
+                        { label: 'Post-Proc', data: [0], backgroundColor: '#8b5cf6' }
+                    ]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { x: { stacked: true, grid: { color: '#333' } }, y: { stacked: true, display: false } },
+                    plugins: { legend: { position: 'bottom', labels: {color: '#ccc'} } }
+                }
+            });
+        }
+        
+        function updateLatencyChart(metrics) {
+            if(!latencyChart || !metrics) return;
+            latencyChart.data.datasets[0].data = [metrics.vibe_fetch_ms];
+            latencyChart.data.datasets[1].data = [metrics.faiss_search_ms];
+            latencyChart.data.datasets[2].data = [metrics.db_fetch_ms];
+            latencyChart.data.datasets[3].data = [metrics.ranking_ms];
+            latencyChart.data.datasets[4].data = [metrics.postprocessing_ms];
+            latencyChart.update();
+        }
+        
+        async function loadTsne() {
+            const btn = event.currentTarget;
+            btn.innerText = 'Computing...';
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/v1/admin/tsne');
+                const data = await res.json();
+                
+                const genres = [...new Set(data.map(d => d.genre))];
+                const colors = ['#8B5CF6', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#ec4899'];
+                
+                const datasets = genres.map((g, i) => {
+                    return {
+                        label: g,
+                        data: data.filter(d => d.genre === g).map(d => ({x: d.x, y: d.y, title: d.title})),
+                        backgroundColor: colors[i % colors.length]
+                    };
+                });
+                
+                const ctx = document.getElementById('tsneChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'scatter',
+                    data: { datasets },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        scales: { x: { grid: { color: '#222' } }, y: { grid: { color: '#222' } } },
+                        plugins: {
+                            tooltip: { callbacks: { label: (ctx) => ctx.raw.title } },
+                            legend: { labels: { color: '#ccc' } }
+                        }
+                    }
+                });
+            } catch(e) { console.error(e); } finally {
+                btn.innerText = 'Loaded ✓';
+            }
+        }
+        
+        async function loadGalleries() {
+            try {
+                const res = await fetch('/api/v1/admin/tracks');
+                const tracks = await res.json();
+                const grid = document.getElementById('gallery-grid');
+                grid.innerHTML = '';
+                tracks.forEach(t => {
+                    grid.innerHTML += `
+                        <div class="bg-black rounded border border-gray-800 relative group" style="height: 120px;">
+                            <div class="absolute top-0 left-0 bg-black/70 w-full text-xs p-1 truncate z-10">${t.title}</div>
+                            <img src="/static/spectrograms/track_${t.id}.png" class="absolute inset-0 w-full h-full object-cover" onerror="this.style.display='none'">
+                            <img src="/static/gradcam/track_${t.id}.png" class="absolute inset-0 w-full h-full object-cover opacity-0 group-hover:opacity-100 transition duration-300" onerror="this.style.display='none'">
+                        </div>
+                    `;
+                });
+            } catch(e) {}
+        }
+
+        // --- Tab 4: Data ---
+        
+        function renderDedup(before, after, tracks) {
+            const container = document.getElementById('dedup-viz');
+            if(!container) return;
+            const diff = before - after;
+            container.innerHTML = `
+                <div class="flex gap-4 text-xs h-full">
+                    <div class="flex-1 bg-gray-900/50 p-2 rounded overflow-auto">
+                        <div class="text-gray-400 font-bold mb-2">Raw Candidates (${before})</div>
+                        <div class="flex flex-col gap-1">
+                            ${tracks.map(t => `<span class="px-2 py-1 bg-gray-800 rounded">${t.title}</span>`).join('')}
+                            ${diff > 0 ? `<span class="px-2 py-1 bg-red-900/30 text-red-400 rounded line-through border border-red-500/30">+ ${diff} filtered (diversity)</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="text-gray-600 self-center font-bold text-lg">→</div>
+                    <div class="flex-1 bg-brand/5 p-2 rounded overflow-auto border border-brand/20">
+                        <div class="text-brand font-bold mb-2">After Dedup (${after})</div>
+                        <div class="flex flex-col gap-1">
+                            ${tracks.map(t => `<span class="px-2 py-1 bg-brand/20 text-brand rounded">${t.title}</span>`).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function loadEvaluation() {
+            const btn = event.currentTarget;
+            btn.innerText = 'Computing...';
+            try {
+                const res = await fetch('/api/v1/admin/evaluation');
+                const data = await res.json();
+                document.getElementById('eval-body').innerHTML = `
+                    <tr class="border-b border-gray-800"><td class="py-2">NDCG@10</td><td>${data.ndcg_at_10.toFixed(4)}</td></tr>
+                    <tr class="border-b border-gray-800"><td class="py-2">Recall@10</td><td>${data.recall_at_10.toFixed(4)}</td></tr>
+                    <tr class="border-b border-gray-800"><td class="py-2">MRR</td><td>${data.mrr.toFixed(4)}</td></tr>
+                `;
+            } catch(e) {} finally {
+                btn.innerText = 'Computed ✓';
+            }
+        }
+
+        async function loadEmbedding() {
+            const id = document.getElementById('embed-select').value;
+            if (!id) return;
+            const res = await fetch(`/api/v1/admin/track/${id}/embedding`);
+            const data = await res.json();
+            const ctx = document.getElementById('embedChart').getContext('2d');
+            if(window._embedChart) window._embedChart.destroy();
+            window._embedChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: Array.from({length: 128}, (_, i) => i + 1),
+                    datasets: [{ label: data.title, data: data.vector, backgroundColor: 'rgba(139,92,246,0.8)', borderWidth: 0, borderRadius: 2 }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { x: { display: false }, y: { grid: { color: '#333' } } }, plugins: { legend: { labels: { color: '#ccc' } } } }
+            });
+        }
+
+        function initGauges() {
+            const createGauge = (id, label, color) => {
+                const ctx = document.getElementById(id).getContext('2d');
+                gauges[id] = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: { labels: [label, ''], datasets: [{ data: [0, 100], backgroundColor: [color, '#222'], borderWidth: 0 }] },
+                    options: { responsive: true, maintainAspectRatio: false, cutout: '75%', plugins: { legend: { display: false }, tooltip: {enabled: false} } }
+                });
+            };
+            createGauge('chart-ild', 'ILD', '#8B5CF6');
+            createGauge('chart-novelty', 'Novelty', '#3b82f6');
+            createGauge('chart-genre', 'Genre', '#10b981');
+            createGauge('chart-artist', 'Artist', '#f59e0b');
+        }
+        
+        function updateGauges(metrics) {
+            if(!metrics) return;
+            gauges['chart-ild'].data.datasets[0].data = [metrics.intra_list_diversity * 100, 100 - (metrics.intra_list_diversity * 100)];
+            gauges['chart-novelty'].data.datasets[0].data = [metrics.novelty_score * 100, 100 - (metrics.novelty_score * 100)];
+            gauges['chart-genre'].data.datasets[0].data = [metrics.genre_spread, 5 - metrics.genre_spread]; // max 5 genres
+            gauges['chart-artist'].data.datasets[0].data = [metrics.unique_artists, 6 - metrics.unique_artists]; // max 6 artists (since limit is 6)
+            Object.values(gauges).forEach(g => g.update());
+        }
+        
+        async function fetchTelemetry() {
+            try {
+                // Fetch tracks for naming map
+                const tr = await fetch('/api/v1/admin/tracks');
+                const tlist = await tr.json();
+                const tmap = {};
+                tlist.forEach(t => tmap[t.id] = t.title);
+
+                const res1 = await fetch('/api/v1/admin/telemetry');
+                const tdata = await res1.json();
+                const tbody = document.getElementById('telemetry-body');
+                tbody.innerHTML = '';
+                [...tdata].reverse().forEach(e => {
+                    const time = new Date(e.timestamp).toLocaleTimeString();
+                    const tname = tmap[e.track_id] || 'T' + e.track_id;
+                    
+                    const ctx = e.context || {};
+                    const ctxStr = Object.keys(ctx).map(k => `${k}:${Math.round(ctx[k]*10)/10}`).join(' ');
+                    tbody.innerHTML += `<tr class="border-b border-gray-800"><td>${time}</td><td>U${e.user_id}</td><td class="truncate max-w-[150px]" title="${tname}">${tname}</td><td><span class="px-2 py-0.5 bg-gray-800 rounded text-xs">${e.event_type}</span></td><td><div class="text-xs text-brand truncate max-w-[150px]" title="${ctxStr}">${ctxStr}</div></td></tr>`;
+
+                });
+                
+                const res2 = await fetch('/api/v1/admin/redis');
+                const rdata = await res2.json();
+                const rbody = document.getElementById('redis-body');
+                rbody.innerHTML = '';
+                if(rdata.length === 0) rbody.innerHTML = '<tr><td colspan="5" class="py-4 text-center text-gray-500">No vibe states yet. Apply a vibe to populate Redis.</td></tr>';
+                rdata.forEach(r => {
+                    rbody.innerHTML += `<tr class="border-b border-gray-800"><td>${r.key}</td><td>${parseFloat(r.data.energy||0).toFixed(2)}</td><td>${parseFloat(r.data.valence||0).toFixed(2)}</td><td>${parseFloat(r.data.acousticness||0).toFixed(2)}</td><td>${parseFloat(r.data.danceability||0).toFixed(2)}</td></tr>`;
+                });
+            } catch(e) {}
+        }
+        
+        async function simulateTelemetry() {
+            await fetch('/api/v1/admin/simulate', {method: 'POST'});
+            fetchTelemetry();
+        }
+
+        // Init
+        window.onload = () => {
+            initRadar();
+            initLatencyChart();
+            initGauges();
+            getRecommendations();
+            fetchStats(); // For ML lab background load
+            
+            // Auto refresh telemetry
+            setInterval(() => {
+                if(document.getElementById('data').classList.contains('active')) fetchTelemetry();
+            }, 3000);
+        };
+    </script>
+</body>
+</html>
