@@ -8,6 +8,9 @@ import torch
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sqlalchemy.future import select
+import json
+import re
+import unicodedata
 
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -27,27 +30,6 @@ GRADCAM_DIR.mkdir(parents=True, exist_ok=True)
 # Load model for feature extraction
 model = AudioFeatureExtractor(embedding_dim=EMBEDDING_DIM)
 model.eval()
-
-def generate_synthetic_audio(duration=30, sr=22050, bpm=120, energy=0.5):
-    """Generate synthetic audio if no files provided"""
-    t = np.linspace(0, duration, int(sr * duration))
-    # Base frequency
-    freq = np.random.uniform(100, 800)
-    y = np.sin(2 * np.pi * freq * t)
-    # Add harmonics based on energy
-    for i in range(2, 5):
-        y += (energy / i) * np.sin(2 * np.pi * (freq * i) * t)
-    
-    # Add rhythm pulses based on bpm
-    beat_interval = 60.0 / bpm
-    pulse = np.zeros_like(y)
-    for i in np.arange(0, duration, beat_interval):
-        idx = int(i * sr)
-        if idx < len(pulse):
-            pulse[idx:idx+1000] = 1.0
-            
-    y = y * 0.5 + pulse * energy * 0.5
-    return y.astype(np.float32), sr
 
 def process_audio(y, sr, track_id):
     # 1. Mel Spectrogram
@@ -74,24 +56,33 @@ def process_audio(y, sr, track_id):
     mel_tensor = torch.tensor(mel_input).unsqueeze(0).unsqueeze(0).float()
     
     # 2. ResNet Embedding
-    with torch.no_grad():
-        embedding = model(mel_tensor)
-        embedding_np = embedding.numpy()[0]
+    # Using torch.enable_grad() so Grad-CAM can compute backward pass
+    with torch.enable_grad():
+        mel_tensor.requires_grad_(True)
+        # 3. Real Grad-CAM Heatmap
+        heatmap = model.generate_gradcam(mel_tensor)
         
-    # 3. Mock Grad-CAM (since we just ran forward pass without hooks for simplicity in seed)
-    # We generate a heatmap based on the actual mel energy distribution
-    heatmap = (mel_input - mel_input.min()) / (mel_input.max() - mel_input.min() + 1e-8)
-    heatmap = np.clip(heatmap * 1.5, 0, 1) # Boost contrast
+        # Forward pass for embedding (without gradients)
+        with torch.no_grad():
+            embedding = model(mel_tensor)
+            embedding_np = embedding.numpy()[0]
+    
+    # Resize heatmap to match mel_input dimensions for display
+    # Use PyTorch functional interpolation to avoid needing cv2
+    h_tensor = torch.from_numpy(heatmap).unsqueeze(0).unsqueeze(0).float()
+    heatmap_resized = torch.nn.functional.interpolate(
+        h_tensor, size=(mel_input.shape[0], mel_input.shape[1]), mode='bilinear', align_corners=False
+    ).squeeze().numpy()
     
     plt.figure(figsize=(10, 4))
     librosa.display.specshow(mel_db, sr=sr, x_axis='time', y_axis='mel', fmax=8000, cmap='gray')
-    plt.imshow(heatmap, aspect='auto', origin='lower', alpha=0.5, cmap='jet', extent=[0, mel_input.shape[1]*512/sr, 0, 8000])
+    plt.imshow(heatmap_resized, aspect='auto', origin='lower', alpha=0.5, cmap='jet', extent=[0, mel_input.shape[1]*512/sr, 0, 8000])
     plt.tight_layout()
     gradcam_path = GRADCAM_DIR / f"track_{track_id}.png"
     plt.savefig(gradcam_path)
     plt.close()
     
-    # Extract features
+    # Extract Real Acoustic Features (Zero Mocking)
     duration_s = len(y) / sr
     bpm_tuple = librosa.beat.beat_track(y=y, sr=sr)
     bpm_val = bpm_tuple[0]
@@ -99,21 +90,42 @@ def process_audio(y, sr, track_id):
         bpm_val = bpm_val.item() if bpm_val.size == 1 else np.mean(bpm_val)
     bpm = float(bpm_val)
     
+    # Energy: RMS
     energy = min(1.0, float(np.mean(librosa.feature.rms(y=y))) * 10)
     
-    # Assign genre based on simple heuristic
+    # Danceability: Variance of onset strength (beat regularity)
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+    danceability = float(np.clip(1.0 - (np.var(onset_env) / (np.max(onset_env) + 1e-8)), 0.0, 1.0))
+    # Adjust for more realistic distribution
+    danceability = min(1.0, danceability + 0.3)
+    
+    # Valence: Spectral Centroid ratio (Brighter = higher valence proxy)
+    cent = librosa.feature.spectral_centroid(y=y, sr=sr)
+    valence = float(np.clip(np.mean(cent) / 4000.0, 0.0, 1.0))
+    
+    acousticness = float(1.0 - energy)
+    
+    # Assign genre based on simple heuristic of audio features (since we don't have tags)
     genres = ["Electronic", "Rock", "Classical", "Hip-Hop", "Jazz"]
-    genre = genres[int((bpm + energy * 100) % 5)]
+    genre_idx = int((bpm + energy * 100 + valence * 50) % 5)
+    genre = genres[genre_idx]
+    
+    # Save the small heatmap matrix for the JSON explainability endpoint
+    # Downsample to 4x10 grid for easy JSON transfer
+    heatmap_json = torch.nn.functional.interpolate(
+        h_tensor, size=(4, 10), mode='bilinear', align_corners=False
+    ).squeeze().numpy().tolist()
     
     return {
         "embedding": embedding_np.tolist(),
         "duration_s": duration_s,
         "bpm": float(bpm),
         "energy": float(energy),
-        "valence": float(np.random.uniform(0.2, 0.9)), # simplified
-        "acousticness": float(1.0 - energy),
-        "danceability": float(np.random.uniform(0.4, 0.9)),
-        "genre": genre
+        "valence": float(valence),
+        "acousticness": float(acousticness),
+        "danceability": float(danceability),
+        "genre": genre,
+        "heatmap_json": heatmap_json
     }
 
 async def seed():
@@ -137,24 +149,26 @@ async def seed():
         
         all_embeddings = []
         all_track_ids = []
+        heatmap_data = {}
         
         track_counter = 1
         
-        # Process real files
-        import re
         for file_path in audio_files:
             print(f"Processing: {file_path.name}")
             try:
                 try:
-                    y, sr = librosa.load(file_path, sr=22050, duration=30)
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        y, sr = librosa.load(file_path, sr=22050, duration=30)
                 except Exception as e1:
-                    print(f"librosa native load failed: {e1}. Trying pydub...")
-                    import os
-                    ffmpeg_dir = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg.Essentials_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-essentials_build\bin")
-                    if os.path.exists(ffmpeg_dir):
-                        os.environ["PATH"] += os.pathsep + ffmpeg_dir
-                        
+                    print(f"librosa native load failed: {e1}. Trying pydub w/ imageio-ffmpeg...")
+                    import imageio_ffmpeg
                     from pydub import AudioSegment
+                    
+                    # Dynamically set ffmpeg without requiring system PATH
+                    AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
+                    
                     audio = AudioSegment.from_file(file_path)[:30000] # first 30 seconds
                     audio = audio.set_frame_rate(22050).set_channels(1)
                     y = np.array(audio.get_array_of_samples(), dtype=np.float32)
@@ -164,11 +178,8 @@ async def seed():
                 features = process_audio(y, sr, track_counter)
                 
                 stem = file_path.stem
-                
-                # New parse_filename logic inline
                 stem = re.sub(r'\s*[\(\[][^\)\]]*[\)\]]', '', stem)
                 stem = re.sub(r'\.mp3$', '', stem, flags=re.IGNORECASE)
-                import unicodedata
                 stem = unicodedata.normalize('NFKC', stem).strip()
                 
                 if '_-_' in stem:
@@ -203,14 +214,23 @@ async def seed():
                 session.add(track)
                 await session.flush()
                 
+                # Store heatmap for explainability endpoint
+                heatmap_data[str(track.id)] = features['heatmap_json']
+                
                 all_embeddings.append(features['embedding'])
                 all_track_ids.append(track.id)
                 track_counter += 1
                 
             except Exception as e:
                 print(f"Error processing {file_path}: {e}")
+                import traceback
+                traceback.print_exc()
                 
         await session.commit()
+        
+        # Save heatmaps to a JSON file for the explainability router to read
+        with open("static/gradcam_data.json", "w") as f:
+            json.dump(heatmap_data, f)
         
         # 3. Seed FAISS
         if all_embeddings:
