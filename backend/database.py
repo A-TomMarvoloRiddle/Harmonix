@@ -21,6 +21,15 @@ class Track(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String)
     artist: Mapped[str] = mapped_column(String)
+    genre: Mapped[str | None] = mapped_column(String, nullable=True)
+    duration_s: Mapped[float | None] = mapped_column(nullable=True)
+    bpm: Mapped[float | None] = mapped_column(nullable=True)
+    energy: Mapped[float | None] = mapped_column(nullable=True)
+    valence: Mapped[float | None] = mapped_column(nullable=True)
+    acousticness: Mapped[float | None] = mapped_column(nullable=True)
+    danceability: Mapped[float | None] = mapped_column(nullable=True)
+    file_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 class Playlist(Base):
     __tablename__ = "playlists"
